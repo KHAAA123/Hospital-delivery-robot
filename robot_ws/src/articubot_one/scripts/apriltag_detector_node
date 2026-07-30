@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+
+import cv2
+from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseArray, Pose, TransformStamped
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import CameraInfo, Image
+from tf2_ros import TransformBroadcaster
+
+
+class AprilTagDetectorNode(Node):
+    TAG_FAMILIES = {
+        '16h5': 'DICT_APRILTAG_16H5',
+        '25h9': 'DICT_APRILTAG_25H9',
+        '36h10': 'DICT_APRILTAG_36H10',
+        '36h11': 'DICT_APRILTAG_36H11',
+    }
+
+    def __init__(self):
+        super().__init__('apriltag_detector_node')
+
+        self.declare_parameter('image_topic', '/camera/image_raw')
+        self.declare_parameter('camera_info_topic', '/camera/camera_info')
+        self.declare_parameter('output_topic', '/camera/apriltag/image')
+        self.declare_parameter('pose_topic', '/camera/apriltag/poses')
+        self.declare_parameter('tag_family', '36h11')
+        self.declare_parameter('tag_size', 0.08)
+        self.declare_parameter('publish_tf', True)
+        self.declare_parameter('tf_timeout', 1.0)
+
+        image_topic = self.get_parameter('image_topic').value
+        camera_info_topic = self.get_parameter('camera_info_topic').value
+        output_topic = self.get_parameter('output_topic').value
+        pose_topic = self.get_parameter('pose_topic').value
+        tag_family = self.get_parameter('tag_family').value
+        self.tag_size = float(self.get_parameter('tag_size').value)
+        self.publish_tf = bool(self.get_parameter('publish_tf').value)
+        self.tf_timeout = float(self.get_parameter('tf_timeout').value)
+
+        self.bridge = CvBridge()
+        self.dictionary = self.create_dictionary(tag_family)
+        self.parameters = cv2.aruco.DetectorParameters_create()
+        self.camera_matrix = None
+        self.distortion_coefficients = None
+        self.camera_frame_id = None
+        self.object_points = self.create_tag_object_points(self.tag_size)
+        self.last_logged_ids = None
+        self.last_transforms = {}
+        self.warned_missing_calibration = False
+
+        self.publisher = self.create_publisher(Image, output_topic, 10)
+        self.pose_publisher = self.create_publisher(PoseArray, pose_topic, 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_timer = self.create_timer(0.1, self.republish_recent_transforms)
+        self.subscription = self.create_subscription(
+            Image,
+            image_topic,
+            self.image_callback,
+            10)
+        self.camera_info_subscription = self.create_subscription(
+            CameraInfo,
+            camera_info_topic,
+            self.camera_info_callback,
+            10)
+
+        self.get_logger().info(
+            f'Detecting AprilTag family {tag_family} from {image_topic}; '
+            f'publishing annotated images to {output_topic} and poses to {pose_topic}')
+
+    def create_dictionary(self, tag_family):
+        if not hasattr(cv2, 'aruco'):
+            raise RuntimeError('OpenCV was built without cv2.aruco support')
+
+        dictionary_name = self.TAG_FAMILIES.get(tag_family.lower())
+        if dictionary_name is None:
+            supported = ', '.join(sorted(self.TAG_FAMILIES))
+            raise RuntimeError(
+                f'Unsupported tag_family "{tag_family}". Supported values: {supported}')
+
+        dictionary_id = getattr(cv2.aruco, dictionary_name, None)
+        if dictionary_id is None:
+            raise RuntimeError(f'OpenCV does not provide {dictionary_name}')
+
+        if hasattr(cv2.aruco, 'getPredefinedDictionary'):
+            return cv2.aruco.getPredefinedDictionary(dictionary_id)
+        return cv2.aruco.Dictionary_get(dictionary_id)
+
+    @staticmethod
+    def create_tag_object_points(tag_size):
+        half_size = tag_size / 2.0
+        return np.array([
+            [-half_size, half_size, 0.0],
+            [half_size, half_size, 0.0],
+            [half_size, -half_size, 0.0],
+            [-half_size, -half_size, 0.0],
+        ], dtype=np.float32)
+
+    def camera_info_callback(self, msg):
+        if msg.k[0] == 0.0:
+            if not self.warned_missing_calibration:
+                self.get_logger().warn(
+                    'Received uncalibrated camera_info; AprilTag 3D pose is disabled')
+                self.warned_missing_calibration = True
+            return
+
+        self.camera_matrix = np.array(msg.k, dtype=np.float64).reshape((3, 3))
+        self.distortion_coefficients = np.array(msg.d, dtype=np.float64)
+        self.camera_frame_id = msg.header.frame_id
+        self.warned_missing_calibration = False
+
+    def image_callback(self, msg):
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except Exception as exc:
+            self.get_logger().error(f'Failed to convert image: {exc}')
+            return
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        corners, ids, _ = cv2.aruco.detectMarkers(
+            gray,
+            self.dictionary,
+            parameters=self.parameters)
+
+        if ids is not None and len(ids) > 0:
+            cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+            detected_ids = tuple(int(tag_id[0]) for tag_id in ids)
+            if detected_ids != self.last_logged_ids:
+                self.get_logger().info(f'Detected AprilTag IDs: {list(detected_ids)}')
+                self.last_logged_ids = detected_ids
+            self.publish_poses(msg, frame, corners, detected_ids)
+        elif self.last_logged_ids:
+            self.get_logger().info('No AprilTags detected')
+            self.last_logged_ids = None
+
+        annotated_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+        annotated_msg.header = msg.header
+        self.publisher.publish(annotated_msg)
+
+    def publish_poses(self, image_msg, frame, corners, detected_ids):
+        if self.camera_matrix is None:
+            if not self.warned_missing_calibration:
+                self.get_logger().warn(
+                    'Waiting for calibrated /camera/camera_info before publishing AprilTag 3D poses')
+                self.warned_missing_calibration = True
+            return
+
+        frame_id = self.camera_frame_id or image_msg.header.frame_id
+        pose_array = PoseArray()
+        pose_array.header = image_msg.header
+        pose_array.header.frame_id = frame_id
+
+        transforms = []
+        for tag_corners, tag_id in zip(corners, detected_ids):
+            image_points = tag_corners.reshape((4, 2)).astype(np.float32)
+            success, rotation_vector, translation_vector = cv2.solvePnP(
+                self.object_points,
+                image_points,
+                self.camera_matrix,
+                self.distortion_coefficients,
+                flags=cv2.SOLVEPNP_IPPE_SQUARE)
+
+            if not success:
+                self.get_logger().warn(f'Pose solve failed for AprilTag {tag_id}')
+                continue
+
+            cv2.aruco.drawAxis(
+                frame,
+                self.camera_matrix,
+                self.distortion_coefficients,
+                rotation_vector,
+                translation_vector,
+                self.tag_size * 0.5)
+
+            pose = self.pose_from_vectors(rotation_vector, translation_vector)
+            pose_array.poses.append(pose)
+
+            if self.publish_tf:
+                transform = self.transform_from_pose(
+                    image_msg.header.stamp,
+                    frame_id,
+                    f'apriltag_{tag_id}',
+                    pose)
+                transforms.append(transform)
+                self.last_transforms[transform.child_frame_id] = transform
+
+        if pose_array.poses:
+            self.pose_publisher.publish(pose_array)
+        if transforms:
+            self.tf_broadcaster.sendTransform(transforms)
+
+    def republish_recent_transforms(self):
+        if not self.publish_tf or not self.last_transforms:
+            return
+
+        now = self.get_clock().now()
+        transforms = []
+        expired_frames = []
+
+        for child_frame, transform in self.last_transforms.items():
+            transform_age = now - rclpy.time.Time.from_msg(transform.header.stamp)
+            if transform_age.nanoseconds > self.tf_timeout * 1e9:
+                expired_frames.append(child_frame)
+                continue
+
+            transform.header.stamp = now.to_msg()
+            transforms.append(transform)
+
+        for child_frame in expired_frames:
+            del self.last_transforms[child_frame]
+
+        if transforms:
+            self.tf_broadcaster.sendTransform(transforms)
+
+    @staticmethod
+    def pose_from_vectors(rotation_vector, translation_vector):
+        pose = Pose()
+        pose.position.x = float(translation_vector[0][0])
+        pose.position.y = float(translation_vector[1][0])
+        pose.position.z = float(translation_vector[2][0])
+
+        rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
+        qw, qx, qy, qz = AprilTagDetectorNode.quaternion_from_matrix(rotation_matrix)
+        pose.orientation.w = qw
+        pose.orientation.x = qx
+        pose.orientation.y = qy
+        pose.orientation.z = qz
+        return pose
+
+    @staticmethod
+    def transform_from_pose(stamp, parent_frame, child_frame, pose):
+        transform = TransformStamped()
+        transform.header.stamp = stamp
+        transform.header.frame_id = parent_frame
+        transform.child_frame_id = child_frame
+        transform.transform.translation.x = pose.position.x
+        transform.transform.translation.y = pose.position.y
+        transform.transform.translation.z = pose.position.z
+        transform.transform.rotation = pose.orientation
+        return transform
+
+    @staticmethod
+    def quaternion_from_matrix(rotation_matrix):
+        trace = np.trace(rotation_matrix)
+
+        if trace > 0.0:
+            scale = np.sqrt(trace + 1.0) * 2.0
+            qw = 0.25 * scale
+            qx = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / scale
+            qy = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / scale
+            qz = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / scale
+        elif rotation_matrix[0, 0] > rotation_matrix[1, 1] and rotation_matrix[0, 0] > rotation_matrix[2, 2]:
+            scale = np.sqrt(1.0 + rotation_matrix[0, 0] - rotation_matrix[1, 1] - rotation_matrix[2, 2]) * 2.0
+            qw = (rotation_matrix[2, 1] - rotation_matrix[1, 2]) / scale
+            qx = 0.25 * scale
+            qy = (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / scale
+            qz = (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / scale
+        elif rotation_matrix[1, 1] > rotation_matrix[2, 2]:
+            scale = np.sqrt(1.0 + rotation_matrix[1, 1] - rotation_matrix[0, 0] - rotation_matrix[2, 2]) * 2.0
+            qw = (rotation_matrix[0, 2] - rotation_matrix[2, 0]) / scale
+            qx = (rotation_matrix[0, 1] + rotation_matrix[1, 0]) / scale
+            qy = 0.25 * scale
+            qz = (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / scale
+        else:
+            scale = np.sqrt(1.0 + rotation_matrix[2, 2] - rotation_matrix[0, 0] - rotation_matrix[1, 1]) * 2.0
+            qw = (rotation_matrix[1, 0] - rotation_matrix[0, 1]) / scale
+            qx = (rotation_matrix[0, 2] + rotation_matrix[2, 0]) / scale
+            qy = (rotation_matrix[1, 2] + rotation_matrix[2, 1]) / scale
+            qz = 0.25 * scale
+
+        norm = np.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
+        return qw / norm, qx / norm, qy / norm, qz / norm
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AprilTagDetectorNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
