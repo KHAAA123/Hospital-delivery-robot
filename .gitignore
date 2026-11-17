@@ -1,0 +1,19 @@
+# ROS 2 / colcon build artifacts
+robot_ws/build/
+robot_ws/install/
+robot_ws/log/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*.save
+.DS_Store
+
+# Experimental maps (kept locally, not published)
+robot_ws/maps/
+*.pgm

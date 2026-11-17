@@ -1,0 +1,12 @@
+[submodule "robot_ws/src/ball_tracker"]
+	path = robot_ws/src/ball_tracker
+	url = https://github.com/joshnewans/ball_tracker.git
+[submodule "robot_ws/src/serial"]
+	path = robot_ws/src/serial
+	url = https://github.com/joshnewans/serial.git
+[submodule "robot_ws/src/vision_opencv"]
+	path = robot_ws/src/vision_opencv
+	url = https://github.com/ros-perception/vision_opencv.git
+[submodule "robot_ws/src/web_video_server"]
+	path = robot_ws/src/web_video_server
+	url = https://github.com/RobotWebTools/web_video_server.git
