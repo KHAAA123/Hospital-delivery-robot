@@ -78,8 +78,8 @@ docs/
 ## 🚀 Build and run
 
 ```bash
-git clone --recursive https://github.com/KHAAA123/Hospital-dilivery-robot.git
-cd Hospital-dilivery-robot/robot_ws
+git clone --recursive https://github.com/KHAAA123/Hospital-delivery-robot.git
+cd Hospital-delivery-robot/robot_ws
 rosdep install --from-paths src --ignore-src -r -y
 colcon build --symlink-install
 source install/setup.bash
