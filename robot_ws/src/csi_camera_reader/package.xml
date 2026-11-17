@@ -3,8 +3,8 @@
 <package format="3">
   <name>csi_camera_reader</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="jetson@todo.todo">jetson</maintainer>
+  <description>ROS 2 node that publishes images from a CSI camera on the Jetson Nano via GStreamer.</description>
+  <maintainer email="154750478+KHAAA123@users.noreply.github.com">Le Hoang Kha</maintainer>
   <license>TODO: License declaration</license>
 
   <test_depend>ament_copyright</test_depend>

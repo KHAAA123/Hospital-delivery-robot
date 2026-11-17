@@ -13,9 +13,9 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='jetson',
-    maintainer_email='jetson@todo.todo',
-    description='TODO: Package description',
+    maintainer='Le Hoang Kha',
+    maintainer_email='154750478+KHAAA123@users.noreply.github.com',
+    description='ROS 2 node that publishes images from a CSI camera on the Jetson Nano via GStreamer.',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={

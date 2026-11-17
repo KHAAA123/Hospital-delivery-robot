@@ -29,6 +29,7 @@ Configured for slow, predictable motion in hospital corridors:
 | Max linear speed | 0.15 m/s | `config/nav2_params.yaml` |
 | Max angular speed | 0.7 rad/s | `config/nav2_params.yaml` |
 | Robot radius / obstacle inflation | 0.22 m / 0.55 m | `config/nav2_params.yaml` |
+| Emergency stop | Physical E-stop button on the robot | Hardware |
 | Manual override | Joystick has highest priority (100) over tracker (20) and navigation (10) | `config/twist_mux.yaml` |
 | Command timeout | Each velocity source is dropped after 0.5 s without messages | `config/twist_mux.yaml` |
 
@@ -40,8 +41,11 @@ Configured for slow, predictable motion in hospital corridors:
 | Microcontroller | Arduino (motor and encoder interface) |
 | Motor driver | BTS7960 |
 | LiDAR | RPLidar A1 |
+| IMU | Inertial measurement unit |
+| Ultrasonic sensors | Short-range obstacle detection |
 | Camera | CSI camera |
 | Wheel encoders | Incremental encoders |
+| Emergency stop | Physical E-stop button |
 | Power | 12 V battery |
 
 ## 💻 Software
