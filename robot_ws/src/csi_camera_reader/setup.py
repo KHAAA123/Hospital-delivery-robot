@@ -16,7 +16,7 @@ setup(
     maintainer='Le Hoang Kha',
     maintainer_email='154750478+KHAAA123@users.noreply.github.com',
     description='ROS 2 node that publishes images from a CSI camera on the Jetson Nano via GStreamer.',
-    license='TODO: License declaration',
+    license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

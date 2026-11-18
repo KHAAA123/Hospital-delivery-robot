@@ -122,6 +122,10 @@ This stack builds on open-source work. Third-party packages keep their original 
 | `vision_opencv` | [ros-perception](https://github.com/ros-perception/vision_opencv) |
 | `web_video_server` | [RobotWebTools](https://github.com/RobotWebTools/web_video_server) |
 
+## 📄 License
+
+Original code in this repository is released under the [MIT License](LICENSE). Third-party packages listed in Credits keep their original licenses.
+
 ## 👥 Team
 
 Developed by the DC Research Group, University of Economics Ho Chi Minh City (UEH), led by Le Hoang Kha. Supervisors: Dr. Dang Tri Dung, Dr. Do Tri Cuong.
